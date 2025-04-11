@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Status</title>
+    <style>
+        body { font-family: sans-serif; }
+        #data-container {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap; /* Preserve formatting */
+            word-wrap: break-word; /* Break long lines */
+            min-height: 100px; /* Ensure it has some height */
+        }
+        .error { color: red; }
+    </style>
+</head>
+<body>
+
+    <h1>Current Data</h1>
+    <div id="data-container">Loading...</div>
+
+    <script>
+        const dataContainer = document.getElementById('data-container');
+        const apiUrl = '/api/data'; // The URL of your Flask API endpoint
+        const pollingInterval = 5000; // Time in milliseconds (e.g., 5000 = 5 seconds)
+
+        async function fetchDataAndUpdate() {
+            console.log("Fetching data..."); // Log to browser console
+            try {
+                const response = await fetch(apiUrl);
+
+                if (!response.ok) {
+                    // Handle HTTP errors (like 404 Not Found, 500 Server Error)
+                    const errorText = await response.text(); // Get error message from server if available
+                    throw new Error(`HTTP error! Status: ${response.status} - ${errorText}`);
+                }
+
+                const data = await response.json();
+
+                // Display the fetched data (pretty-printed JSON)
+                dataContainer.textContent = JSON.stringify(data, null, 2); // null, 2 for pretty printing
+                dataContainer.classList.remove('error'); // Remove error class if previously set
+
+            } catch (error) {
+                console.error('Error fetching or processing data:', error);
+                dataContainer.textContent = `Error loading data: ${error.message}\n\nCheck the backend server and the data file.`;
+                dataContainer.classList.add('error'); // Add error class for styling
+            }
+        }
+
+        // --- Polling ---
+        // 1. Fetch data immediately when the page loads
+        fetchDataAndUpdate();
+
+        // 2. Set up an interval to fetch data repeatedly
+        setInterval(fetchDataAndUpdate, pollingInterval);
+
+    </script>
+
+</body>
+</html>

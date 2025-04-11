@@ -1,6 +1,6 @@
 import json
 import os
-from flask import Flask, jsonify, abort
+from flask import Flask, jsonify, abort, render_template
 
 # Create the Flask application instance
 app = Flask(__name__)
@@ -11,60 +11,48 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
 JSON_FILE_PATH = os.path.join(DATA_DIR, 'status.json')
 
 # --- Helper Function to Load Data ---
+# (fetchDataFromPython function remains the same as before)
 def fetchDataFromPython():
     """
     Loads data from a predefined JSON file.
-
-    Returns:
-        dict: The data loaded from the JSON file.
-
-    Raises:
-        FileNotFoundError: If the JSON file does not exist.
-        json.JSONDecodeError: If the file contains invalid JSON.
-        Exception: For other potential file reading errors.
+    Handles file creation if it doesn't exist.
     """
     try:
         # Ensure the data directory exists
         if not os.path.exists(DATA_DIR):
             os.makedirs(DATA_DIR)
-            # Create a sample data.json if it doesn't exist
-            sample_data = {
-                "message": "Hello from the backend!",
-                "items": ["item1", "item2", "item3"],
-                "timestamp": "2023-01-01T12:00:00Z"
-            }
-            with open(JSON_FILE_PATH, 'w') as f:
-                json.dump(sample_data, f, indent=4)
-            print(f"Created sample data directory and file at: {JSON_FILE_PATH}")
+            print(f"Created data directory: {DATA_DIR}")
 
-        elif not os.path.exists(JSON_FILE_PATH):
-             # Create a sample data.json if it doesn't exist but dir does
+        # Create a sample data.json if it doesn't exist
+        if not os.path.exists(JSON_FILE_PATH):
+            print(f"Data file not found at {JSON_FILE_PATH}, creating sample file.")
             sample_data = {
-                "message": "Hello from the backend!",
-                "items": ["item1", "item2", "item3"],
-                "timestamp": "2023-01-01T12:00:00Z"
+                "message": "Sample data - file was just created!",
+                "status": "Initial",
+                "timestamp": "Never updated"
             }
             with open(JSON_FILE_PATH, 'w') as f:
                 json.dump(sample_data, f, indent=4)
             print(f"Created sample data file at: {JSON_FILE_PATH}")
+            return sample_data # Return the sample data immediately
 
-
+        # Read the existing file
         with open(JSON_FILE_PATH, 'r') as f:
             data = json.load(f)
         return data
-    except FileNotFoundError:
-        print(f"Error: Data file not found at {JSON_FILE_PATH}")
-        # In a real app, you might return default data or raise a specific error
+    except FileNotFoundError: # Should theoretically be handled by creation logic now
+        print(f"Error: Data file logic failed for {JSON_FILE_PATH}")
         raise FileNotFoundError(f"Data file not found: {JSON_FILE_PATH}")
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON format in {JSON_FILE_PATH}: {e}")
         raise json.JSONDecodeError(f"Invalid JSON in file: {JSON_FILE_PATH}", e.doc, e.pos)
     except Exception as e:
-        print(f"An unexpected error occurred while reading {JSON_FILE_PATH}: {e}")
-        raise Exception(f"Could not read data file: {e}")
+        print(f"An unexpected error occurred while reading/writing {JSON_FILE_PATH}: {e}")
+        raise Exception(f"Could not read/write data file: {e}")
 
 
 # --- API Endpoint ---
+# (This /api/data endpoint remains the same)
 @app.route('/api/data', methods=['GET'])
 def get_data():
     """
@@ -74,34 +62,29 @@ def get_data():
         data = fetchDataFromPython()
         return jsonify(data)
     except FileNotFoundError as e:
-        # Return a 404 Not Found error if the file doesn't exist
         abort(404, description=str(e))
     except json.JSONDecodeError as e:
-        # Return a 500 Internal Server Error for invalid JSON
         abort(500, description=f"Server error: Could not parse data file. {e}")
     except Exception as e:
-        # Return a generic 500 error for other issues
         abort(500, description=f"Server error: {e}")
 
-# --- Basic Route for Testing ---
+# --- MODIFY THIS ROUTE ---
 @app.route('/')
 def index():
     """
-    A simple index route to confirm the server is running.
+    Serve the main HTML page that will display the data.
     """
-    return "Backend server is running. Access data at /api/data"
+    # This tells Flask to find 'index.html' in the 'templates' folder
+    return render_template('index.html')
 
 # --- Main Execution Block ---
+# (This remains the same)
 if __name__ == '__main__':
-    # Ensure the data directory and a sample file exist on startup
     try:
-        fetchDataFromPython() # This call ensures dir/file creation if needed
+        fetchDataFromPython() # Ensure dir/file exists on startup
     except Exception as e:
         print(f"Warning: Could not initialize data file on startup: {e}")
 
-    # Run the Flask development server
-    # Debug=True enables auto-reloading and provides detailed error pages
-    # In production, use a proper WSGI server like Gunicorn or uWSGI
     app.run(debug=True, port=5000)
 
 # --- Sample data/data.json file ---
