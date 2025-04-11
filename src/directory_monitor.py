@@ -4,6 +4,7 @@ import os
 import time
 from pathlib import Path
 import sys
+import json
 
 # --- Constants ---
 CONFIG_FILE = 'config.ini'
@@ -24,6 +25,14 @@ Execution Plan:
 # --- Global State ---
 # Keep track of files already seen/processed to avoid reprocessing
 processed_files = set()
+status_data = {
+    "last_check_time": None,
+    "last_files_found": 0,
+    "total_processed_count": 0,
+    "monitoring_active": False,
+    "error": None
+}
+status_file_path = Path('status.json') # Default path
 
 # --- Logging Setup ---
 def setup_logging():
@@ -47,9 +56,10 @@ def load_config(config_file_path):
 
     try:
         config.read(config_file_path)
-        monitor_dir_str = config.get('Monitor', 'Directory', fallback=None)
+        monitor_dir_str = config.get('Monitor', 'ToDoDirectory', fallback=None)
         poll_interval_str = config.get('Monitor', 'PollIntervalSeconds', fallback='900') # Default 15 mins
         ack_suffix = config.get('Monitor', 'AckSuffix', fallback='_ack.txt')
+        status_file_str = config.get('Monitor', 'StatusFile', fallback='status.json') # Get status file path
 
         if not monitor_dir_str:
             logging.error("Configuration error: 'Directory' not set in [{}]".format('Monitor'))
@@ -78,7 +88,17 @@ def load_config(config_file_path):
             logging.error(f"Invalid 'PollIntervalSeconds': {poll_interval_str}. Using default 900 seconds.")
             poll_interval = 900
 
-        logging.info(f"Configuration loaded: MonitorDir='{monitor_dir}', PollInterval={poll_interval}s, AckSuffix='{ack_suffix}'")
+        # Validate status file path
+        global status_file_path # Use global variable
+        status_file_path = Path(status_file_str)
+        # Ensure parent directory exists for status file
+        try:
+            status_file_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logging.warning(f"Could not create parent directory for status file {status_file_path}: {e}")
+            # Continue, maybe writing to current dir is fine, or save_status will fail later
+
+        logging.info(f"Configuration loaded: MonitorDir='{monitor_dir}', PollInterval={poll_interval}s, AckSuffix='{ack_suffix}', StatusFile='{status_file_path}'")
         return monitor_dir, poll_interval, ack_suffix
 
     except configparser.Error as e:
@@ -89,6 +109,20 @@ def load_config(config_file_path):
         logging.error(f"An unexpected error occurred during configuration loading: {e}")
         print(f"An unexpected error occurred: {e}")
         sys.exit(1)
+
+
+# --- Status Saving ---
+def save_status():
+    """Saves the current status_data dictionary to the JSON file."""
+    global status_data, status_file_path
+    try:
+        with status_file_path.open('w', encoding='utf-8') as f:
+            json.dump(status_data, f, indent=4)
+        logging.debug(f"Status saved to {status_file_path}")
+    except IOError as e:
+        logging.error(f"Failed to save status to {status_file_path}: {e}")
+    except Exception as e:
+        logging.error(f"Unexpected error saving status: {e}")
 
 
 # --- File Processing ---
@@ -129,8 +163,12 @@ def process_file(file_path: Path, ack_suffix: str):
 # --- Directory Monitoring ---
 def check_directory(monitor_dir: Path, ack_suffix: str):
     """Checks the directory for new .txt files and processes them."""
+    global status_data, processed_files # Add status_data
     logging.debug(f"Checking directory: {monitor_dir}")
-    found_new_file = False
+    files_processed_this_run = 0
+    status_data['last_check_time'] = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    status_data['error'] = None # Clear previous error
+
     try:
         current_files = set(monitor_dir.glob('*.txt')) # Get all .txt files
         # Determine new files (present now but not in processed_files set)
@@ -146,7 +184,8 @@ def check_directory(monitor_dir: Path, ack_suffix: str):
             # Process the new instruction file
             process_file(file_path, ack_suffix)
             processed_files.add(file_path) # Mark as processed
-            found_new_file = True
+            files_processed_this_run += 1
+            status_data['total_processed_count'] += 1 # Increment total count
 
         # Optional: Clean up processed_files set if files are deleted
         # This prevents the set from growing indefinitely if files are removed
@@ -162,11 +201,18 @@ def check_directory(monitor_dir: Path, ack_suffix: str):
         # Depending on requirements, might want to exit or keep retrying
     except OSError as e:
         logging.error(f"OS error checking directory {monitor_dir}: {e}")
+        status_data['error'] = f"OS error checking directory: {e}"
     except Exception as e:
         logging.error(f"Unexpected error checking directory {monitor_dir}: {e}")
+        status_data['error'] = f"Unexpected error checking directory: {e}"
 
-    if not found_new_file:
+    if files_processed_this_run > 0:
+        logging.info(f"Processed {files_processed_this_run} new file(s).")
+    else:
         logging.info("No new instruction files found.")
+
+    status_data['last_files_found'] = files_processed_this_run
+    save_status() # Save status after check
 
 
 # --- Main Application Logic ---
@@ -175,6 +221,11 @@ def main():
     setup_logging()
     config_path = Path(CONFIG_FILE)
     monitor_dir, poll_interval, ack_suffix = load_config(config_path)
+
+    global status_data # Use global
+    status_data['monitoring_active'] = True
+    status_data['error'] = None
+    save_status() # Save initial status
 
     logging.info("--- Directory Monitor Started ---")
     logging.info(f"Monitoring: {monitor_dir}")
@@ -199,9 +250,17 @@ def main():
             time.sleep(poll_interval)
     except KeyboardInterrupt:
         logging.info("--- Directory Monitor Stopped (Keyboard Interrupt) ---")
+        status_data['monitoring_active'] = False
+        status_data['last_check_time'] = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        status_data['error'] = "Stopped by user (KeyboardInterrupt)"
+        save_status() # Save final status on exit
     except Exception as e:
-        logging.error(f"An unexpected error occurred in the main loop: {e}", exc_info=True)
-        logging.info("--- Directory Monitor Stopped (Error) ---")
+        logging.error(f"An unexpected error caused the monitor to stop: {e}")
+        status_data['monitoring_active'] = False
+        status_data['last_check_time'] = time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        status_data['error'] = f"Fatal error: {e}"
+        save_status() # Save final status on error
+        print(f"Monitor stopped due to unexpected error: {e}")
     finally:
         logging.info("Application shutdown.")
 
